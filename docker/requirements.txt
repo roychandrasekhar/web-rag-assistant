@@ -1,0 +1,14 @@
+langchain
+langchain-community
+langchain-core
+langchain-text-splitters
+langchain-huggingface
+langchain-groq
+chromadb
+huggingface-hub
+sentence-transformers
+beautifulsoup4
+python-dotenv
+requests
+flask
+redis
