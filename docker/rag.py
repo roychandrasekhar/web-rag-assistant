@@ -1,38 +1,30 @@
 import os
 from dotenv import load_dotenv
+load_dotenv() 
 
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_groq import ChatGroq
-from langchain_community.vectorstores import Chroma
+from langchain_community.document_loaders import WebBaseLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import WebBaseLoader
+from langchain_community.vectorstores import FAISS
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnablePassthrough
 from langchain_community.chat_message_histories import RedisChatMessageHistory
 
-load_dotenv("/app/.env")
 
-rag_chain = None
-chat_history = None
-
-
-def build_rag_chain(session_id="web-session"):
-    global rag_chain, chat_history
-
-    source_url = os.getenv("SOURCE_URL")
-    redis_url = os.getenv("REDIS_URL")
-
-    chat_history = RedisChatMessageHistory(
+def get_chat_history(session_id: str):
+    return RedisChatMessageHistory(
         session_id=session_id,
-        url=redis_url,
-        ttl=3600
+        url=os.getenv("REDIS_URL")
     )
 
-    docs = WebBaseLoader(source_url).load()
+
+def build_dynamic_rag(url: str):
+    docs = WebBaseLoader(url).load()
 
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
+        chunk_size=800,
+        chunk_overlap=100
     )
     chunks = splitter.split_documents(docs)
 
@@ -40,47 +32,27 @@ def build_rag_chain(session_id="web-session"):
         model_name="all-MiniLM-L6-v2"
     )
 
-    vectordb = Chroma.from_documents(
-        chunks,
-        embeddings,
-        persist_directory="/data/chroma"
-    )
-
-    retriever = vectordb.as_retriever()
+    vectorstore = FAISS.from_documents(chunks, embeddings)
+    retriever = vectorstore.as_retriever()
 
     llm = ChatGroq(
+        groq_api_key=os.getenv("GROQ_API_KEY"),
         model="llama-3.1-8b-instant",
         temperature=0
     )
 
     prompt = ChatPromptTemplate.from_messages([
         ("system",
-         "You are a helpful assistant. Use CONTEXT and HISTORY. "
-         "If unrelated, answer normally."),
+         "Answer ONLY using the provided context from the webpage."),
         ("human",
-         "HISTORY:\n{history}\n\n"
-         "QUESTION: {question}\n\n"
-         "CONTEXT:\n{context}")
+         "QUESTION:\n{question}\n\nCONTEXT:\n{context}")
     ])
 
-    rag_chain = (
+    return (
         {
             "context": lambda x: retriever.invoke(x["question"]),
-            "question": RunnablePassthrough(),
-            "history": lambda _: "\n".join(
-                f"{m.type.upper()}: {m.content}"
-                for m in chat_history.messages
-            )
+            "question": RunnablePassthrough()
         }
         | prompt
         | llm
     )
-
-
-def ask(question: str) -> str:
-    result = rag_chain.invoke({"question": question})
-
-    chat_history.add_user_message(question)
-    chat_history.add_ai_message(result.content)
-
-    return result.content

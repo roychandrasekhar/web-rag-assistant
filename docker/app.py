@@ -1,12 +1,14 @@
+import os
 from flask import Flask, request, jsonify, send_from_directory
-from rag import build_rag_chain, ask
+from dotenv import load_dotenv
+
+from utils import extract_url
+from langchain_groq import ChatGroq
+from rag import build_dynamic_rag, get_chat_history
+
+load_dotenv()
 
 app = Flask(__name__, static_folder="static", static_url_path="")
-
-@app.before_first_request
-def init():
-    build_rag_chain(session_id="browser-session")
-
 
 @app.route("/")
 def index():
@@ -22,11 +24,27 @@ def health():
 def chat():
     data = request.json
     user_input = data.get("message", "")
+    session_id = data.get("session_id", "browser-session")
 
-    if not user_input:
-        return jsonify({"answer": "Please enter a message"}), 400
+    chat_history = get_chat_history(session_id)
+    chat_history.add_user_message(user_input)
 
-    answer = ask(user_input)
+    url = extract_url(user_input)
+
+    if url:
+        # 🔹 URL-based RAG
+        rag = build_dynamic_rag(url)
+        answer = rag.invoke(user_input).content
+    else:
+        # 🔹 Normal chat (NO RAG)
+        llm = ChatGroq(
+            groq_api_key=os.getenv("GROQ_API_KEY"),
+            model="llama-3.1-8b-instant",
+            temperature=0
+        )
+        answer = llm.invoke(user_input).content
+
+    chat_history.add_ai_message(answer)
     return jsonify({"answer": answer})
 
 
